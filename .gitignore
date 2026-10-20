@@ -1,0 +1,4 @@
+extension.js.bak
+*.log
+node_modules/
+.vscode/
