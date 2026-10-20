@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Cross-platform fixer for Google Antigravity VS Code extension download loop.
- * Works on Windows, macOS, and Linux.
+ * Compatible with all Node.js LTS versions (Node 14+).
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
 
 const isRestore = process.argv.includes("--restore") || process.argv.includes("-r");
 
@@ -18,6 +18,8 @@ const homeDir = os.homedir();
 const candidateDirs = [
   path.join(homeDir, ".vscode", "extensions"),
   path.join(homeDir, ".vscode-insiders", "extensions"),
+  path.join(homeDir, ".vscode-oss", "extensions"),
+  path.join(homeDir, ".cursor", "extensions")
 ];
 
 let extensionDirs = [];
@@ -32,7 +34,7 @@ for (const dir of candidateDirs) {
         }
       }
     } catch {
-      // ignore
+      // ignore unreadable directories
     }
   }
 }
@@ -40,6 +42,19 @@ for (const dir of candidateDirs) {
 if (extensionDirs.length === 0) {
   console.error("\x1b[31m[-] Could not find any 'google.google-antigravity' extension installed.\x1b[0m");
   process.exit(1);
+}
+
+function writeAtomicSync(filePath, content) {
+  const tmpPath = filePath + ".tmp";
+  try {
+    fs.writeFileSync(tmpPath, content, "utf8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    if (fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+    throw err;
+  }
 }
 
 for (const extDir of extensionDirs) {
@@ -77,16 +92,16 @@ for (const extDir of extensionDirs) {
 
   if (code.includes(target)) {
     code = code.replace(target, replacement);
-    fs.writeFileSync(extJsPath, code, "utf8");
+    writeAtomicSync(extJsPath, code);
     console.log("\x1b[32m[+] Successfully increased version check timeout from 5s to 30s!\x1b[0m");
   } else if (code.includes(replacement)) {
     console.log("\x1b[34m[i] File is already patched with 30s timeout.\x1b[0m");
   } else {
-    // Regex fallback
-    const regex = /(Ha\([^)]*--version[^)]*\{timeout:)5E3(\})/g;
+    // Regex fallback with replacer function to avoid capture group index ambiguity
+    const regex = /(Ha\([^)]*--version[^)]*\{timeout:\s*)5E3(\s*\})/g;
     if (regex.test(code)) {
-      code = code.replace(regex, "$13E4$2");
-      fs.writeFileSync(extJsPath, code, "utf8");
+      code = code.replace(regex, (match, prefix, suffix) => prefix + "3E4" + suffix);
+      writeAtomicSync(extJsPath, code);
       console.log("\x1b[32m[+] Successfully patched using regex replacement!\x1b[0m");
     } else {
       console.warn("\x1b[33m[!] Target pattern not found. The extension might already be patched or updated.\x1b[0m");
@@ -95,11 +110,11 @@ for (const extDir of extensionDirs) {
 }
 
 if (process.platform === "win32") {
-  const geminiBin = path.join(homeDir, ".gemini", "bin");
+  const geminiBinExe = path.join(homeDir, ".gemini", "bin", "agy.exe");
   console.log("\n\x1b[36m--- Windows Defender Optimization ---\x1b[0m");
   console.log("To prevent Windows Defender from delaying binary execution on startup,");
   console.log("open PowerShell as Administrator and run:");
-  console.log(`\x1b[32m    Add-MpPreference -ExclusionPath "${geminiBin}"\x1b[0m`);
+  console.log(`\x1b[32m    Add-MpPreference -ExclusionPath "${geminiBinExe}"\x1b[0m`);
 }
 
 console.log("\n\x1b[32m[+] Done! Restart VS Code for changes to take effect.\x1b[0m");
