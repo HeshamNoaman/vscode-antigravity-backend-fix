@@ -44,7 +44,7 @@ Even after the download completes and reaches 100%, reopening the project or sta
 
 Clone the repository and run:
 ```powershell
-git clone https://github.com/<your-username>/vscode-antigravity-backend-fix.git
+git clone https://github.com/HeshamNoaman/vscode-antigravity-backend-fix.git
 cd vscode-antigravity-backend-fix
 .\fix.ps1
 ```
