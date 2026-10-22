@@ -3,42 +3,25 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: Windows | macOS | Linux](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green.svg)](#)
 
-A fast, lightweight, and non-destructive hotfix for the bug in the **Google Antigravity** VS Code extension (`google.google-antigravity`) that causes it to repeatedly re-download the **~202 MB** backend binary (`agy.exe`) every time you open a project or start VS Code.
+A fast, lightweight, and non-destructive hotfix for the issues in the **Google Antigravity** VS Code extension (`google.google-antigravity`) that cause recurring **~202 MB** backend binary (`agy.exe`) downloads every time you open a project or start VS Code.
 
 ---
 
-## 🛑 The Issue
+## 🔍 The Issues & Root Causes
 
-When opening projects in VS Code with the Google Antigravity extension installed, a recurring notification appears:
+### 1. The 5-Second Timeout Race Condition (Windows Defender)
+Every time VS Code opens, the extension checks if the local binary (`~/.gemini/bin/agy.exe`) is valid by executing:
+```javascript
+Ha(a, ["--version"], { timeout: 5000 })
+```
+On Windows, `agy.exe` is a **~202 MB executable**. On startup, disk I/O and **Windows Defender real-time scanning** frequently delay execution past 5 seconds. The extension catches this timeout, assumes the binary is missing or broken, and triggers a full 202 MB download.
 
-> **"Installing Antigravity Backend...: Downloading Antigravity Backend (win32-x64)..."**
-
-Even after the download completes and reaches 100%, reopening the project or starting VS Code the next day triggers the entire 202 MB download all over again. In internal logs, the binary is frequently re-downloaded dozens of times (consuming 10+ GB of bandwidth and causing noticeable startup lag).
-
----
-
-## 🔍 Root Cause Analysis
-
-1. **Extension Activation Routine**:  
-   Every time VS Code opens a project, the extension activates and runs a self-check to verify if the local CLI backend (`~/.gemini/bin/agy.exe`) is installed and meets version requirements.
-2. **The 5-Second Timeout Race Condition**:  
-   Inside `extension.js` (function `gb`), the version check executes:
-   ```javascript
-   Ha(a, ["--version"], { timeout: 5000 })
-   ```
-   On Windows, `agy.exe` is a **~202 MB executable**. During project opening, VS Code indexes files and launches language servers, saturating CPU/disk I/O. Simultaneously, **Windows Defender** intercepts and performs real-time antimalware scanning on the 202 MB binary.
-3. **The False-Alarm Trigger**:  
-   Because the execution timeout is capped at only **5 seconds (5000 ms)**, cold starts frequently exceed 5 seconds. Node.js aborts the process with `SIGTERM` / timeout:
-   ```text
-   [INSTALL] Failed to execute binary C:\Users\<user>\.gemini\bin\agy.exe: Error: Command failed: ... --version
-   ```
-4. **The Endless Re-Download Loop**:  
-   The extension catches this timeout and erroneously concludes that **no valid backend exists** or that the file is corrupt. It immediately launches a full download of the 202 MB binary from Google Cloud Storage, overwriting the file.  
-   Because the version validation cache is only held in memory during that session, closing VS Code resets the state, causing the exact same race condition to occur every time VS Code opens.
+### 2. Rapid Daily Upstream Releases Without Confirmation
+Google publishes backend releases almost daily (e.g., `1.4.3` -> `1.4.4` -> `1.4.5`). Whenever a new patch release is found, the extension automatically wipes the working local binary and re-downloads 200MB in the background—causing project lockups (`spawn EBUSY`) and wasting dozens of gigabytes of bandwidth.
 
 ---
 
-## ⚡ Quick Fix (Automated)
+## ⚡ Quick Fix (Automated Menu)
 
 ### Option 1: Double-Click or PowerShell (Windows)
 
@@ -50,6 +33,27 @@ cd vscode-antigravity-backend-fix
 ```
 *Or simply double-click `fix.bat`.*
 
+You will be presented with an interactive menu:
+```text
+Select an option:
+  [1] Full Fix (30s Timeout + Update Prompt & Snooze) [Recommended]
+      - Fixes Defender timeout (5s -> 30s)
+      - Prompts before downloading daily updates (Update / Later 1 day / Skip 3 days)
+  [2] Timeout Fix Only
+      - Increases timeout to 30s without update prompt
+  [3] Restore Original Extension from Backup
+  [4] Exit
+```
+
+Non-interactive flags:
+```powershell
+.\fix.ps1 -Full         # Recommended: Timeout + Prompt & Snooze
+.\fix.ps1 -TimeoutOnly  # Timeout only
+.\fix.ps1 -Restore      # Revert to original backup
+```
+
+---
+
 ### Option 2: Node.js (Universal / Cross-Platform)
 
 Compatible with all Node.js versions (Node 14+):
@@ -57,11 +61,25 @@ Compatible with all Node.js versions (Node 14+):
 node fix.js
 ```
 
-The script will:
-1. Locate your installed `google.google-antigravity` extension across VS Code, Insiders, VSCodium, and Cursor.
-2. Automatically create a pristine backup (`extension.js.bak`) that is never overwritten by subsequent runs.
-3. Safely update the version check timeout from **5 seconds** (`5E3`) to **30 seconds** (`3E4`) using atomic writes.
-4. Validate the changes.
+Non-interactive flags:
+```bash
+node fix.js --full      # Recommended
+node fix.js --timeout   # Timeout only
+node fix.js --restore   # Revert to original backup
+```
+
+---
+
+## 💡 What the "Full Fix" Adds
+
+When an update is detected, instead of silently triggering a 200MB background download, VS Code will display a clean prompt:
+
+> **"Antigravity Backend update (v1.4.5) is available (current: v1.4.4). Update now?"**  
+> `[Update]` `[Later (1 day)]` `[Skip for 3 days]`
+
+- **Update**: Downloads the new release immediately.
+- **Later (1 day)**: Postpones checks for 24 hours and uses your existing binary seamlessly.
+- **Skip for 3 days**: Silences update checks for 72 hours.
 
 ---
 
@@ -75,40 +93,11 @@ Add-MpPreference -ExclusionPath "$HOME\.gemini\bin\agy.exe"
 ```
 *(Notice: Scoped strictly to the `agy.exe` binary file rather than the entire folder for maximum security).*
 
-Alternatively, add it via the Windows Security GUI:
-1. Open **Windows Security** → **Virus & threat protection**.
-2. Click **Manage settings** under *Virus & threat protection settings*.
-3. Scroll down to **Exclusions** → **Add or remove exclusions**.
-4. Click **Add an exclusion** → **File** → Select:
-   ```
-   C:\Users\<YourUsername>\.gemini\bin\agy.exe
-   ```
-
----
-
-## 🛠️ Manual Fix (Without Scripts)
-
-If you prefer to edit manually:
-1. Navigate to:
-   ```text
-   %USERPROFILE%\.vscode\extensions\google.google-antigravity-<version>\
-   ```
-2. Open `extension.js` in any text editor.
-3. Search for:
-   ```javascript
-   Ha(a,["--version"],{timeout:5E3})
-   ```
-4. Replace `5E3` with `3E4` (30 seconds):
-   ```javascript
-   Ha(a,["--version"],{timeout:3E4})
-   ```
-5. Save the file and restart VS Code.
-
 ---
 
 ## 🔄 Reverting / Restoring
 
-To revert back to the original unmodified extension:
+To revert back to the original unmodified extension at any time:
 
 - **PowerShell**:
   ```powershell
@@ -125,20 +114,22 @@ To revert back to the original unmodified extension:
 
 ---
 
-## 🇸🇦 ملخص المشكلة والحل (بالعربية)
+## 📖 شرح المشكلة والحل (بالعربية)
 
 ### المشكلة:
-عند فتح أي مشروع في VS Code مع إضافة **Google Antigravity**، يظهر إشعار دائم يقوم بتحميل ملف الباك إند:
-`Downloading Antigravity Backend (win32-x64)...`
-وحتى بعد اكتمال التحميل بنسبة 100%، يتكرر التحميل في كل مرة يُعاد فيها تشغيل البرنامج أو فتح المشروع.
+عند فتح أي مشروع في VS Code مع إضافة **Google Antigravity**، يظهر إشعار متكرر يومياً وبشكل مزعج:  
+`Downloading Antigravity Backend (win32-x64)...`  
+حتى بعد اكتمال التحميل، يتكرر تنزيل الملف بالكامل (~202 ميجابايت) عند إعادة فتح المشروع أو إطلاق تحديث يومي جديد.
 
-### سبب المشكلة:
-- حجم ملف التشغيل `agy.exe` يبلغ حوالي **202 ميجابايت**.
-- عند تشغيل VS Code، تقوم الإضافة بالتحقق من إصدار الملف عبر تشغيل `agy.exe --version` مع مهلة انتظار (Timeout) محددة بـ **5 ثوانٍ فقط**.
-- في بيئة ويندوز، يقوم مضاد الفيروسات (Windows Defender) بفحص الملف، ومع الضغط الأولي لفتح المشروع يستغرق الأمر أكثر من 5 ثوانٍ، فيفشل الأمر ويعتبر البرنامج أن الملف غير موجود أو تالف، مما يدفعه لإعادة تحميل الـ 202 ميجابايت بالكامل من جديد في كل مرة.
+### أسباب المشكلة:
+1. **مهلة الفحص (5 ثوانٍ فقط):** فحص إصدار `agy.exe` يستغرق وقتاً أطول من 5 ثوانٍ بسبب مسح Windows Defender لملف بحجم 202 ميجابايت، فيفترض المحرر أن الملف مفقود ويبدأ التحميل.
+2. **التحديثات التلقائية المستمرة:** تصدر تحديثات شبه يومية، وتقوم الإضافة بالتنزيل التلقائي دون سؤال المستخدم مما يسبب بطء واستهلاك للإنترنت وتعارض فتح النوافذ (`spawn EBUSY`).
 
 ### الحل:
-تشغيل السكربت (`fix.ps1` أو `fix.bat`) لرفع مهلة الانتظار إلى 30 ثانية باستخدام كتابة آمنة للملفات (Atomic Writes)، مع إضافة مسار الملف `~/.gemini/bin/agy.exe` إلى استثناءات Windows Defender ليعمل البرنامج بسرعة فائقة وبدون أي تحميل متكرر.
+الاسكربت يوفر قائمة تفاعلية سهلة:
+- **الحل الكامل [1] (موصى به):** رفع مهلة الفحص إلى 30 ثانية + إظهار رسالة تأكيد عند وجود تحديث جديد مع خيار تأجيل التحديث (يوم أو 3 أيام).
+- **إصلاح المهلة فقط [2]:** رفع المهلة إلى 30 ثانية دون رسالة التأكيد.
+- **استعادة النسخة الأصلية [3]:** الرجوع للنسخة الأصلية غير المعدلة في أي وقت.
 
 ---
 
