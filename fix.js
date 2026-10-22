@@ -20,7 +20,7 @@ if (isHelp) {
 Usage: node fix.js [options]
 
 Options:
-  --full, -f        Apply Full Fix (30s timeout + prompt with download size & settings control) [Default]
+  --full, -f        Apply Full Fix (30s timeout + download gatekeeper & settings control) [Default]
   --timeout, -t     Apply Timeout Fix only (increase timeout from 5s to 30s)
   --restore, -r     Restore original extension from backup
   --help, -h        Show this help message
@@ -40,8 +40,9 @@ function promptMenu() {
     console.log("   VS Code Google Antigravity Backend Re-download Fixer   ");
     console.log("\x1b[36m==========================================================\x1b[0m\n");
     console.log("Select an option:");
-    console.log("  \x1b[32m[1] Full Fix (Timeout + Update Confirmation & Settings)\x1b[0m \x1b[33m[Recommended]\x1b[0m");
-    console.log("      - Fixes Defender timeout (5s -> 30s)");
+    console.log("  \x1b[32m[1] Full Fix (Timeout + Download Gatekeeper & Settings)\x1b[0m \x1b[33m[Recommended]\x1b[0m");
+    console.log("      - Fixes Defender timeout (5s -> 30s) + transient process lock retry");
+    console.log("      - Download Gatekeeper: Never downloads if binary already exists on disk");
     console.log("      - Prompts before downloading updates with exact download size");
     console.log("      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently");
     console.log("      - Adds Manual Check command and VS Code settings configuration");
@@ -171,109 +172,137 @@ async function main() {
       console.log(`\x1b[32m[+] Created pristine backup: ${path.basename(pkgJsonBak)}\x1b[0m`);
     }
 
-    let code = fs.readFileSync(extJsPath, "utf8");
+    // Always start patching from pristine backup to guarantee clean injection
+    let code = fs.readFileSync(extJsBak, "utf8");
     let modified = false;
 
     // 1. Timeout Patch (5s -> 30s)
-    const target = 'Ha(a,["--version"],{timeout:5E3})';
-    const replacement = 'Ha(a,["--version"],{timeout:3E4})';
-
-    if (code.includes(target)) {
-      code = code.replace(target, replacement);
+    const targetTimeout = 'Ha(a,["--version"],{timeout:5E3})';
+    const repTimeout = 'Ha(a,["--version"],{timeout:3E4})';
+    if (code.includes(targetTimeout)) {
+      code = code.replace(targetTimeout, repTimeout);
       modified = true;
       console.log("\x1b[32m[+] Increased version check timeout from 5s to 30s.\x1b[0m");
-    } else if (code.includes(replacement)) {
-      console.log("\x1b[34m[i] Timeout fix (30s) is already applied.\x1b[0m");
-    } else {
-      const regex = /(Ha\([^)]*--version[^)]*\{timeout:\s*)5E3(\s*\})/g;
-      if (regex.test(code)) {
-        code = code.replace(regex, (match, prefix, suffix) => prefix + "3E4" + suffix);
-        modified = true;
-        console.log("\x1b[32m[+] Increased version check timeout using regex match.\x1b[0m");
-      }
     }
 
-    // 2. Full Fix: Enhanced Prompt, Download Size, Confirmation, and Settings
-    if (mode === "full") {
-      // Injection 1: Settings & Snooze Check Before Remote Fetch
-      const regex1 = /(var d=b\(await c\(hb\(w,Ga\.MIN_AGY_VERSION,k\)\)\);let ja=Ga\.MIN_AGY_VERSION;a=!1;if\(d\)\{)/;
-      const inj1 = '$1' +
-        'let _cfg=l.workspace.getConfiguration("antigravity");' +
-        'let _mode=_cfg.get("updateCheckMode")||"prompt";' +
-        'if(!globalThis.__agyForceCheck){' +
-          'if(_mode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary v${d}.`);return w;}' +
-          'let _snooze=_cfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");' +
-          'if(_snooze&&Date.now()<Number(_snooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_snooze)).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}' +
-        '}';
+    // 2. Retry logic for binary execution to prevent transient EBUSY / process locks
+    const targetExec = 'let {stdout:m,stderr:p}=c(await d(Ha(a,["--version"],{timeout:3E4})))';
+    const repExec = 'let _vRes;try{_vRes=c(await d(Ha(a,["--version"],{timeout:3E4})))}catch(_fe){c(await d(new Promise(_r=>setTimeout(_r,300))));_vRes=c(await d(Ha(a,["--version"],{timeout:3E4})))}let {stdout:m,stderr:p}=_vRes';
+    if (code.includes(targetExec)) {
+      code = code.replace(targetExec, repExec);
+      modified = true;
+      console.log("\x1b[32m[+] Added retry logic for binary execution (prevents lockup on toggle).\x1b[0m");
+    }
 
-      // Injection 2: Prompt with Download Size, 4 Options, and Confirmation Messages
-      const regex2 = /(Skipping download\.`\),\s*w;)(let Ub=)/;
-      const inj2 = '$1' +
-        'if(d&&!cb(d,ja)&&l.workspace.getConfiguration("antigravity").get("updateCheckMode")!=="always"){' +
-          'globalThis.__agyPromptShown=true;' +
-          'let _sz="~76 MB (~202 MB uncompressed)";' +
-          'try{' +
-            'let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;' +
-            'let _mres=b(await c(ta(_murl,{signal:AbortSignal.timeout(1500)})));' +
-            'if(_mres&&_mres.status===200){' +
-              'let _mdata=b(await c(_mres.json()));' +
-              'let _bin=tb(_mdata,process.platform,process.arch);' +
-              'if(_bin&&_bin.url){' +
-                'let _hres=b(await c(ta(_bin.url,{method:"HEAD",signal:AbortSignal.timeout(1500)})));' +
-                'let _cl=_hres&&_hres.headers&&_hres.headers.get("content-length");' +
-                'if(_cl){_sz=`${(Number(_cl)/(1024*1024)).toFixed(1)} MB (~202 MB uncompressed)`;}' +
-              '}' +
-            '}' +
-          '}catch(_e){}' +
-          'let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${d}). Update now?\\n\\nDownload size: ${_sz}`;' +
-          'let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));' +
-          'if(_ans==="Update"){' +
-            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));' +
-            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch(_e){}' +
-          '}else if(_ans==="Later (1 day)"){' +
-            'let _until=Date.now()+86400000;' +
-            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
-            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}' +
-            'l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
-            'k.appendLine(`[INSTALL] User chose \'Later (1 day)\'. Continuing with existing binary v${d}.`);' +
-            'return w;' +
-          '}else if(_ans==="Skip for 3 days"){' +
-            'let _until=Date.now()+259200000;' +
-            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
-            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}' +
-            'l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
-            'k.appendLine(`[INSTALL] User chose \'Skip for 3 days\'. Continuing with existing binary v${d}.`);' +
-            'return w;' +
-          '}else if(_ans==="Disable update checks permanently"){' +
-            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));' +
-            'try{' +
-              'let _c=l.workspace.getConfiguration("antigravity");' +
-              '_c.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);' +
-              '_c.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);' +
-            '}catch(_e){}' +
-            'l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run \'Antigravity: Check for Backend Updates\' from the Command Palette.");' +
-            'k.appendLine(`[INSTALL] User chose \'Disable update checks permanently\'. Continuing with existing binary v${d}.`);' +
-            'return w;' +
-          '}else{' +
+    // 3. Full Fix: Enhanced Entrance, Download Gatekeeper & Settings
+    if (mode === "full") {
+      // Entrance of Sb: Check mode and snooze BEFORE anything else
+      const targetEntrance = 'var d=b(await c(hb(w,Ga.MIN_AGY_VERSION,k)));let ja=Ga.MIN_AGY_VERSION;a=!1;';
+      const repEntrance = 'var d=b(await c(hb(w,Ga.MIN_AGY_VERSION,k)));let _agyInstalledVer=d;let ja=Ga.MIN_AGY_VERSION;a=!1;' +
+        'let _agyCfg=l.workspace.getConfiguration("antigravity");' +
+        'let _agyMode=_agyCfg.get("updateCheckMode")||"prompt";' +
+        'let _agySnooze=_agyCfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");' +
+        'if(!globalThis.__agyForceCheck){' +
+          'if(_agyMode==="disabled"){' +
+            'k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary.`);' +
             'return w;' +
           '}' +
-        '}$2';
+          'if(_agySnooze&&Date.now()<Number(_agySnooze)){' +
+            'k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_agySnooze)).toLocaleString()}. Continuing with existing binary.`);' +
+            'return w;' +
+          '}' +
+        '}';
+      if (code.includes(targetEntrance)) {
+        code = code.replace(targetEntrance, repEntrance);
+        modified = true;
+        console.log("\x1b[32m[+] Injected settings & snooze check at installer entry point.\x1b[0m");
+      }
 
-      // Injection 3: Register Manual Check & Configure Settings Commands
-      const regex3 = /(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{.*?\}\)\);)/;
-      const inj3 = '$1' +
+      // Gatekeeper before Ub: INTERCEPT ANY DOWNLOAD IF BINARY EXISTS ON DISK
+      const targetUb = 'let Ub=async Bb=>{';
+      const repUb = 'let _agyExists=!1;try{b(await c(fa.promises.access(w,fa.constants.F_OK))),_agyExists=!0}catch{}' +
+        'if(_agyExists){' +
+          'if(!globalThis.__agyForceCheck){' +
+            'if(_agyMode==="disabled"){' +
+              'k.appendLine(`[INSTALL] Download blocked: updateCheckMode is disabled. Using existing binary at ${w}.`);' +
+              'return w;' +
+            '}' +
+            'if(_agySnooze&&Date.now()<Number(_agySnooze)){' +
+              'k.appendLine(`[INSTALL] Download blocked: updates silenced until ${new Date(Number(_agySnooze)).toLocaleString()}. Using existing binary at ${w}.`);' +
+              'return w;' +
+            '}' +
+          '}' +
+          'if(_agyMode!=="always"){' +
+            'globalThis.__agyPromptShown=!0;' +
+            'let _curVer=_agyInstalledVer||"1.4.5";' +
+            'try{let {stdout:_s}=b(await c(Ha(w,["--version"],{timeout:3E4})));let _m=_s.match(/(\\d+\\.\\d+\\.\\d+[^ \\t\\n\\r]*)/);if(_m)_curVer=_m[1];}catch{}' +
+            'let _sz="~76 MB (~202 MB uncompressed)";' +
+            'try{' +
+              'let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;' +
+              'let _mres=b(await c(ta(_murl,{signal:AbortSignal.timeout(1500)})));' +
+              'if(_mres&&_mres.status===200){' +
+                'let _mdata=b(await c(_mres.json()));' +
+                'let _bin=tb(_mdata,process.platform,process.arch);' +
+                'if(_bin&&_bin.url){' +
+                  'let _hres=b(await c(ta(_bin.url,{method:"HEAD",signal:AbortSignal.timeout(1500)})));' +
+                  'let _cl=_hres&&_hres.headers&&_hres.headers.get("content-length");' +
+                  'if(_cl){_sz=`${(Number(_cl)/(1024*1024)).toFixed(1)} MB (~202 MB uncompressed)`;}' +
+                '}' +
+              '}' +
+            '}catch{}' +
+            'let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${_curVer}). Update now?\\n\\nDownload size: ${_sz}`;' +
+            'let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));' +
+            'if(_ans==="Update"){' +
+              'b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));' +
+              'try{_agyCfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch{}' +
+            '}else if(_ans==="Later (1 day)"){' +
+              'let _until=Date.now()+86400000;' +
+              'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
+              'try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}' +
+              'l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
+              'k.appendLine(`[INSTALL] User chose \'Later (1 day)\'. Continuing with existing binary v${_curVer}.`);' +
+              'return w;' +
+            '}else if(_ans==="Skip for 3 days"){' +
+              'let _until=Date.now()+259200000;' +
+              'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
+              'try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}' +
+              'l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
+              'k.appendLine(`[INSTALL] User chose \'Skip for 3 days\'. Continuing with existing binary v${_curVer}.`);' +
+              'return w;' +
+            '}else if(_ans==="Disable update checks permanently"){' +
+              'b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));' +
+              'try{' +
+                '_agyCfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);' +
+                '_agyCfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);' +
+              '}catch{}' +
+              'l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run \'Antigravity: Check for Backend Updates\' from the Command Palette.");' +
+              'k.appendLine(`[INSTALL] User chose \'Disable update checks permanently\'. Continuing with existing binary v${_curVer}.`);' +
+              'return w;' +
+            '}else{' +
+              'k.appendLine(`[INSTALL] Update prompt dismissed. Continuing with existing binary v${_curVer}.`);' +
+              'return w;' +
+            '}' +
+          '}' +
+        '}' +
+        'let Ub=async Bb=>{';
+      if (code.includes(targetUb)) {
+        code = code.replace(targetUb, repUb);
+        modified = true;
+        console.log("\x1b[32m[+] Injected download gatekeeper before Ub (prevents any unintended downloads).\x1b[0m");
+      }
+
+      // Commands registration
+      const regexCmd = /(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{.*?\}\)\);)/;
+      const repCmd = '$1' +
         'a.subscriptions.push(l.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{' +
           'l.window.withProgress({location:l.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{' +
-            'globalThis.__agyForceCheck=true;' +
-            'globalThis.__agyPromptShown=false;' +
+            'globalThis.__agyForceCheck=true;globalThis.__agyPromptShown=false;' +
             'try{' +
               'let _cfg=l.workspace.getConfiguration("antigravity");' +
               'await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);' +
               'await a.globalState.update("antigravity.updatePostponedUntil",0);' +
               'await cc.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(a);' +
-              'if(!globalThis.__agyPromptShown){' +
-                'l.window.showInformationMessage("Antigravity backend is up to date.");' +
-              '}' +
+              'if(!globalThis.__agyPromptShown){l.window.showInformationMessage("Antigravity backend is up to date.");}' +
             '}catch(_err){l.window.showErrorMessage(`Update check failed: ${_err.message}`);}' +
             'finally{delete globalThis.__agyForceCheck;delete globalThis.__agyPromptShown;}' +
           '});' +
@@ -318,55 +347,25 @@ async function main() {
             'l.commands.executeCommand("workbench.action.openSettings","antigravity");' +
           '}' +
         '}));';
-
-      // Clean previously applied basic snooze if present to avoid duplicate injections
-      if (code.includes("antigravity.checkForBackendUpdates")) {
-        console.log("\x1b[34m[i] Enhanced update prompt and commands are already active.\x1b[0m");
-      } else {
-        // If an earlier simple patch exists, restore clean base from backup first
-        if (code.includes("antigravity.updatePostponedUntil") && fs.existsSync(extJsBak)) {
-          code = fs.readFileSync(extJsBak, "utf8");
-          // Re-apply timeout fix
-          code = code.replace(target, replacement);
-        }
-
-        if (regex1.test(code) && regex2.test(code)) {
-          code = code.replace(regex1, inj1);
-          code = code.replace(regex2, inj2);
-          if (regex3.test(code)) {
-            code = code.replace(regex3, inj3);
-          } else {
-            console.warn("\x1b[33m[!] Could not match openSettings registration point for commands in extension.js.\x1b[0m");
-          }
-          modified = true;
-          console.log("\x1b[32m[+] Injected update prompt with download size & command palette controls.\x1b[0m");
-        } else {
-          console.warn("\x1b[33m[!] Could not match injection points in extension.js.\x1b[0m");
-        }
+      if (regexCmd.test(code)) {
+        code = code.replace(regexCmd, repCmd);
+        modified = true;
+        console.log("\x1b[32m[+] Registered manual update check & configuration commands.\x1b[0m");
       }
 
-      // 3. Update package.json to contribute settings & commands in VS Code
+      // Update package.json
       if (fs.existsSync(pkgJsonPath)) {
         try {
           const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
           let pkgModified = false;
-
           pkg.contributes = pkg.contributes || {};
           pkg.contributes.commands = pkg.contributes.commands || [];
           pkg.contributes.configuration = pkg.contributes.configuration || {};
           pkg.contributes.configuration.properties = pkg.contributes.configuration.properties || {};
 
           const commandsToAdd = [
-            {
-              command: "antigravity.checkForBackendUpdates",
-              title: "Check for Backend Updates",
-              category: "Antigravity"
-            },
-            {
-              command: "antigravity.configureUpdateSettings",
-              title: "Configure Backend Update Settings",
-              category: "Antigravity"
-            }
+            { command: "antigravity.checkForBackendUpdates", title: "Check for Backend Updates", category: "Antigravity" },
+            { command: "antigravity.configureUpdateSettings", title: "Configure Backend Update Settings", category: "Antigravity" }
           ];
 
           for (const cmd of commandsToAdd) {
@@ -398,8 +397,6 @@ async function main() {
           if (pkgModified) {
             writeAtomicSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
             console.log("\x1b[32m[+] Updated package.json with configuration settings & commands.\x1b[0m");
-          } else {
-            console.log("\x1b[34m[i] package.json already contains configuration settings.\x1b[0m");
           }
         } catch (err) {
           console.warn("\x1b[33m[!] Could not update package.json: " + err.message + "\x1b[0m");

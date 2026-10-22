@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     1. Full Fix (Default):
-       - Increases execution timeout from 5s to 30s (prevents Defender cold-start kill).
+       - Increases execution timeout from 5s to 30s + adds transient process lock retry.
+       - Download Gatekeeper: If the binary exists on disk, intercepts ANY download attempts and asks first.
        - Prompts before downloading updates with exact download size.
        - Options: [Update], [Later (1 day)], [Skip for 3 days], [Disable update checks permanently].
        - Confirms your selection and guides you to Extension Settings if you want to change it later.
@@ -15,7 +16,7 @@
        - Restores original extension.js and package.json from backup.
 
 .PARAMETER Full
-    Applies Full Fix (Timeout + Update Confirmation Prompt, Size, Settings & Commands).
+    Applies Full Fix (Timeout + Download Gatekeeper, Size, Settings & Commands).
 
 .PARAMETER TimeoutOnly
     Applies Timeout Fix only (5s -> 30s).
@@ -77,8 +78,9 @@ if ($Restore) {
 } else {
     if ([Environment]::UserInteractive) {
         Write-Host "Select an option:"
-        Write-Host "  [1] Full Fix (Timeout + Update Prompt, Size & Settings) [Recommended]" -ForegroundColor Green
-        Write-Host "      - Fixes Defender timeout (5s -> 30s)"
+        Write-Host "  [1] Full Fix (Timeout + Download Gatekeeper & Settings) [Recommended]" -ForegroundColor Green
+        Write-Host "      - Fixes Defender timeout (5s -> 30s) + transient process lock retry"
+        Write-Host "      - Download Gatekeeper: Never downloads if binary already exists on disk"
         Write-Host "      - Prompts before downloading updates with exact download size"
         Write-Host "      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently"
         Write-Host "      - Adds Manual Check command and VS Code settings configuration"
@@ -126,8 +128,8 @@ if ($targetFolders.Count -eq 0) {
 }
 
 foreach ($folder in $targetFolders) {
-    $extJsPath  = Join-Path $folder.FullName "extension.js"
-    $extJsBak   = Join-Path $folder.FullName "extension.js.bak"
+    $extJsPath   = Join-Path $folder.FullName "extension.js"
+    $extJsBak    = Join-Path $folder.FullName "extension.js.bak"
     $pkgJsonPath = Join-Path $folder.FullName "package.json"
     $pkgJsonBak  = Join-Path $folder.FullName "package.json.bak"
 
@@ -169,64 +171,53 @@ foreach ($folder in $targetFolders) {
         Write-Success "Created pristine backup at: $(Split-Path $pkgJsonBak -Leaf)"
     }
 
-    $content = [System.IO.File]::ReadAllText($extJsPath, [System.Text.Encoding]::UTF8)
+    # Read from pristine backup to ensure clean injection
+    $content = [System.IO.File]::ReadAllText($extJsBak, [System.Text.Encoding]::UTF8)
     $modified = $false
 
     # 1. Timeout Patch (5s -> 30s)
-    $targetPattern = 'Ha(a,["--version"],{timeout:5E3})'
-    $patchedString = 'Ha(a,["--version"],{timeout:3E4})'
-
-    if ($content.Contains($targetPattern)) {
-        $content = $content.Replace($targetPattern, $patchedString)
+    $targetTimeout = 'Ha(a,["--version"],{timeout:5E3})'
+    $repTimeout    = 'Ha(a,["--version"],{timeout:3E4})'
+    if ($content.Contains($targetTimeout)) {
+        $content = $content.Replace($targetTimeout, $repTimeout)
         $modified = $true
         Write-Success "Increased version check timeout from 5s to 30s."
-    } elseif ($content.Contains($patchedString)) {
-        Write-Info "Timeout fix (30s) is already applied."
-    } else {
-        $regex = '(\{timeout:)\s*5E3(\})'
-        if ($content -match $regex) {
-            $newContent = [System.Text.RegularExpressions.Regex]::Replace($content, '(?<=Ha\([^)]*--version[^)]*\{timeout:\s*)5E3(?=\s*\})', '3E4')
-            if ($newContent -ne $content) {
-                $content = $newContent
-                $modified = $true
-                Write-Success "Increased version check timeout using regex match."
-            }
-        }
     }
 
-    # 2. Enhanced Prompt, Size, Options & Settings (Full Fix)
+    # 2. Add retry logic to handle transient process lock / EBUSY
+    $targetExec = 'let {stdout:m,stderr:p}=c(await d(Ha(a,["--version"],{timeout:3E4})))'
+    $repExec    = 'let _vRes;try{_vRes=c(await d(Ha(a,["--version"],{timeout:3E4})))}catch(_fe){c(await d(new Promise(_r=>setTimeout(_r,300))));_vRes=c(await d(Ha(a,["--version"],{timeout:3E4})))}let {stdout:m,stderr:p}=_vRes'
+    if ($content.Contains($targetExec)) {
+        $content = $content.Replace($targetExec, $repExec)
+        $modified = $true
+        Write-Success "Added retry logic for binary execution."
+    }
+
+    # 3. Full Fix: Enhanced Entrance, Download Gatekeeper & Settings
     if ($Mode -eq "Full") {
-        if ($content.Contains("antigravity.checkForBackendUpdates")) {
-            Write-Info "Enhanced update prompt and commands are already active."
-        } else {
-            # If an earlier simple patch exists, revert to clean backup before re-patching
-            if ($content.Contains("antigravity.updatePostponedUntil") -and (Test-Path $extJsBak)) {
-                $content = [System.IO.File]::ReadAllText($extJsBak, [System.Text.Encoding]::UTF8)
-                $content = $content.Replace($targetPattern, $patchedString)
-            }
+        $targetEntrance = 'var d=b(await c(hb(w,Ga.MIN_AGY_VERSION,k)));let ja=Ga.MIN_AGY_VERSION;a=!1;'
+        $repEntrance    = 'var d=b(await c(hb(w,Ga.MIN_AGY_VERSION,k)));let _agyInstalledVer=d;let ja=Ga.MIN_AGY_VERSION;a=!1;let _agyCfg=l.workspace.getConfiguration("antigravity");let _agyMode=_agyCfg.get("updateCheckMode")||"prompt";let _agySnooze=_agyCfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");if(!globalThis.__agyForceCheck){if(_agyMode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary.`);return w;}if(_agySnooze&&Date.now()<Number(_agySnooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_agySnooze)).toLocaleString()}. Continuing with existing binary.`);return w;}}'
+        if ($content.Contains($targetEntrance)) {
+            $content = $content.Replace($targetEntrance, $repEntrance)
+            $modified = $true
+            Write-Success "Injected settings & snooze check at installer entry point."
+        }
 
-            $regex1 = '(var d=b\(await c\(hb\(w,Ga\.MIN_AGY_VERSION,k\)\)\);let ja=Ga\.MIN_AGY_VERSION;a=!1;if\(d\)\{)'
-            $inj1   = '$1let _cfg=l.workspace.getConfiguration("antigravity");let _mode=_cfg.get("updateCheckMode")||"prompt";if(!globalThis.__agyForceCheck){if(_mode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary v${d}.`);return w;}let _snooze=_cfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");if(_snooze&&Date.now()<Number(_snooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_snooze)).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}}'
+        $targetUb = 'let Ub=async Bb=>{'
+        $repUb    = 'let _agyExists=!1;try{b(await c(fa.promises.access(w,fa.constants.F_OK))),_agyExists=!0}catch{}if(_agyExists){if(!globalThis.__agyForceCheck){if(_agyMode==="disabled"){k.appendLine(`[INSTALL] Download blocked: updateCheckMode is disabled. Using existing binary at ${w}.`);return w;}if(_agySnooze&&Date.now()<Number(_agySnooze)){k.appendLine(`[INSTALL] Download blocked: updates silenced until ${new Date(Number(_agySnooze)).toLocaleString()}. Using existing binary at ${w}.`);return w;}}if(_agyMode!=="always"){globalThis.__agyPromptShown=!0;let _curVer=_agyInstalledVer||"1.4.5";try{let {stdout:_s}=b(await c(Ha(w,["--version"],{timeout:3E4})));let _m=_s.match(/(\d+\.\d+\.\d+[^ \t\n\r]*)/);if(_m)_curVer=_m[1];}catch{}let _sz="~76 MB (~202 MB uncompressed)";try{let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;let _mres=b(await c(ta(_murl,{signal:AbortSignal.timeout(1500)})));if(_mres&&_mres.status===200){let _mdata=b(await c(_mres.json()));let _bin=tb(_mdata,process.platform,process.arch);if(_bin&&_bin.url){let _hres=b(await c(ta(_bin.url,{method:"HEAD",signal:AbortSignal.timeout(1500)})));let _cl=_hres&&_hres.headers&&_hres.headers.get("content-length");if(_cl){_sz=`${(Number(_cl)/(1024*1024)).toFixed(1)} MB (~202 MB uncompressed)`;}}}}catch{}let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${_curVer}). Update now?\n\nDownload size: ${_sz}`;let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));if(_ans==="Update"){b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));try{_agyCfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch{}}else if(_ans==="Later (1 day)"){let _until=Date.now()+86400000;b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");k.appendLine(`[INSTALL] User chose ''Later (1 day)''. Continuing with existing binary v${_curVer}.`);return w;}else if(_ans==="Skip for 3 days"){let _until=Date.now()+259200000;b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");k.appendLine(`[INSTALL] User chose ''Skip for 3 days''. Continuing with existing binary v${_curVer}.`);return w;}else if(_ans==="Disable update checks permanently"){b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));try{_agyCfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);_agyCfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);}catch{}l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run ''Antigravity: Check for Backend Updates'' from the Command Palette.");k.appendLine(`[INSTALL] User chose ''Disable update checks permanently''. Continuing with existing binary v${_curVer}.`);return w;}else{k.appendLine(`[INSTALL] Update prompt dismissed. Continuing with existing binary v${_curVer}.`);return w;}}}let Ub=async Bb=>{'
+        if ($content.Contains($targetUb)) {
+            $content = $content.Replace($targetUb, $repUb)
+            $modified = $true
+            Write-Success "Injected download gatekeeper before Ub (prevents any unintended downloads)."
+        }
 
-            $regex2 = '(Skipping download\.`\),\s*w;)(let Ub=)'
-            $inj2   = '$1if(d&&!cb(d,ja)&&l.workspace.getConfiguration("antigravity").get("updateCheckMode")!=="always"){globalThis.__agyPromptShown=true;let _sz="~76 MB (~202 MB uncompressed)";try{let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;let _mres=b(await c(ta(_murl,{signal:AbortSignal.timeout(1500)})));if(_mres&&_mres.status===200){let _mdata=b(await c(_mres.json()));let _bin=tb(_mdata,process.platform,process.arch);if(_bin&&_bin.url){let _hres=b(await c(ta(_bin.url,{method:"HEAD",signal:AbortSignal.timeout(1500)})));let _cl=_hres&&_hres.headers&&_hres.headers.get("content-length");if(_cl){_sz=`${(Number(_cl)/(1024*1024)).toFixed(1)} MB (~202 MB uncompressed)`;}}}}catch(_e){}let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${d}). Update now?\n\nDownload size: ${_sz}`;let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));if(_ans==="Update"){b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch(_e){}}else if(_ans==="Later (1 day)"){let _until=Date.now()+86400000;b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");k.appendLine(`[INSTALL] User chose ''Later (1 day)''. Continuing with existing binary v${d}.`);return w;}else if(_ans==="Skip for 3 days"){let _until=Date.now()+259200000;b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");k.appendLine(`[INSTALL] User chose ''Skip for 3 days''. Continuing with existing binary v${d}.`);return w;}else if(_ans==="Disable update checks permanently"){b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));try{let _c=l.workspace.getConfiguration("antigravity");_c.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);_c.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);}catch(_e){}l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run ''Antigravity: Check for Backend Updates'' from the Command Palette.");k.appendLine(`[INSTALL] User chose ''Disable update checks permanently''. Continuing with existing binary v${d}.`);return w;}else{return w;}}$2'
+        $regexCmd = '(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{.*?\}\)\);)'
+        $repCmd   = '$1a.subscriptions.push(l.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{l.window.withProgress({location:l.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{globalThis.__agyForceCheck=true;globalThis.__agyPromptShown=false;try{let _cfg=l.workspace.getConfiguration("antigravity");await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",0);await cc.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(a);if(!globalThis.__agyPromptShown){l.window.showInformationMessage("Antigravity backend is up to date.");}}catch(_err){l.window.showErrorMessage(`Update check failed: ${_err.message}`);}finally{delete globalThis.__agyForceCheck;delete globalThis.__agyPromptShown;}});}));a.subscriptions.push(l.commands.registerCommand("antigravity.configureUpdateSettings",async()=>{let _pick=await l.window.showQuickPick([{label:"$(check) Enable Automatic Updates (Prompt on update)",description:"Prompt before downloading with download size",action:"prompt"},{label:"$(clock) Pause Updates for 1 Day",description:"Silence update checks for 24 hours",action:"pause1d"},{label:"$(clock) Pause Updates for 3 Days",description:"Silence update checks for 72 hours",action:"pause3d"},{label:"$(clock) Pause Updates for 1 Week",description:"Silence update checks for 7 days",action:"pause7d"},{label:"$(circle-slash) Disable Automatic Updates Permanently",description:"Never check automatically; manual check only",action:"disabled"},{label:"$(gear) Open Antigravity Settings",description:"Open VS Code Settings filtered to Antigravity",action:"settings"}],{placeHolder:"Configure Antigravity Backend Update Behavior"});if(!_pick)return;let _cfg=l.workspace.getConfiguration("antigravity");if(_pick.action==="prompt"){await _cfg.update("updateCheckMode","prompt",l.ConfigurationTarget.Global);await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",0);l.window.showInformationMessage("Antigravity updates set to Prompt mode. Snooze cleared.");}else if(_pick.action==="pause1d"){let _u=Date.now()+86400000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 1 day.");}else if(_pick.action==="pause3d"){let _u=Date.now()+259200000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 3 days.");}else if(_pick.action==="pause7d"){let _u=Date.now()+7*86400000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 1 week.");}else if(_pick.action==="disabled"){await _cfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);await _cfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER);l.window.showInformationMessage("Antigravity automatic update checks disabled permanently.");}else if(_pick.action==="settings"){l.commands.executeCommand("workbench.action.openSettings","antigravity");}}));'
 
-            $regex3 = '(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{.*?\}\)\);)'
-            $inj3   = '$1a.subscriptions.push(l.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{l.window.withProgress({location:l.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{globalThis.__agyForceCheck=true;globalThis.__agyPromptShown=false;try{let _cfg=l.workspace.getConfiguration("antigravity");await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",0);await cc.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(a);if(!globalThis.__agyPromptShown){l.window.showInformationMessage("Antigravity backend is up to date.");}}catch(_err){l.window.showErrorMessage(`Update check failed: ${_err.message}`);}finally{delete globalThis.__agyForceCheck;delete globalThis.__agyPromptShown;}});}));a.subscriptions.push(l.commands.registerCommand("antigravity.configureUpdateSettings",async()=>{let _pick=await l.window.showQuickPick([{label:"$(check) Enable Automatic Updates (Prompt on update)",description:"Prompt before downloading with download size",action:"prompt"},{label:"$(clock) Pause Updates for 1 Day",description:"Silence update checks for 24 hours",action:"pause1d"},{label:"$(clock) Pause Updates for 3 Days",description:"Silence update checks for 72 hours",action:"pause3d"},{label:"$(clock) Pause Updates for 1 Week",description:"Silence update checks for 7 days",action:"pause7d"},{label:"$(circle-slash) Disable Automatic Updates Permanently",description:"Never check automatically; manual check only",action:"disabled"},{label:"$(gear) Open Antigravity Settings",description:"Open VS Code Settings filtered to Antigravity",action:"settings"}],{placeHolder:"Configure Antigravity Backend Update Behavior"});if(!_pick)return;let _cfg=l.workspace.getConfiguration("antigravity");if(_pick.action==="prompt"){await _cfg.update("updateCheckMode","prompt",l.ConfigurationTarget.Global);await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",0);l.window.showInformationMessage("Antigravity updates set to Prompt mode. Snooze cleared.");}else if(_pick.action==="pause1d"){let _u=Date.now()+86400000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 1 day.");}else if(_pick.action==="pause3d"){let _u=Date.now()+259200000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 3 days.");}else if(_pick.action==="pause7d"){let _u=Date.now()+7*86400000;await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",_u);l.window.showInformationMessage("Antigravity updates paused for 1 week.");}else if(_pick.action==="disabled"){await _cfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);await _cfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);await a.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER);l.window.showInformationMessage("Antigravity automatic update checks disabled permanently.");}else if(_pick.action==="settings"){l.commands.executeCommand("workbench.action.openSettings","antigravity");}}));'
-
-            if (($content -match $regex1) -and ($content -match $regex2)) {
-                $content = [System.Text.RegularExpressions.Regex]::Replace($content, $regex1, $inj1)
-                $content = [System.Text.RegularExpressions.Regex]::Replace($content, $regex2, $inj2)
-                if ($content -match $regex3) {
-                    $content = [System.Text.RegularExpressions.Regex]::Replace($content, $regex3, $inj3)
-                } else {
-                    Write-Warn "Could not match openSettings registration point for commands in extension.js."
-                }
-                $modified = $true
-                Write-Success "Injected update prompt with download size & command palette controls."
-            } else {
-                Write-Warn "Could not match update confirmation injection points."
-            }
+        if ($content -match $regexCmd) {
+            $content = [System.Text.RegularExpressions.Regex]::Replace($content, $regexCmd, $repCmd)
+            $modified = $true
+            Write-Success "Registered manual update check & configuration commands."
         }
 
         # Update package.json
