@@ -21,7 +21,7 @@ Google publishes backend releases almost daily (e.g., `1.4.3` -> `1.4.4` -> `1.4
 
 ---
 
-## ⚡ Quick Fix (Automated Menu)
+## ⚡ Quick Fix (Interactive Menu)
 
 ### Option 1: Double-Click or PowerShell (Windows)
 
@@ -36,9 +36,11 @@ cd vscode-antigravity-backend-fix
 You will be presented with an interactive menu:
 ```text
 Select an option:
-  [1] Full Fix (30s Timeout + Update Prompt & Snooze) [Recommended]
+  [1] Full Fix (Timeout + Update Prompt, Size & Settings) [Recommended]
       - Fixes Defender timeout (5s -> 30s)
-      - Prompts before downloading daily updates (Update / Later 1 day / Skip 3 days)
+      - Prompts before downloading updates with exact download size
+      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently
+      - Adds Manual Check command and VS Code settings configuration
   [2] Timeout Fix Only
       - Increases timeout to 30s without update prompt
   [3] Restore Original Extension from Backup
@@ -47,7 +49,7 @@ Select an option:
 
 Non-interactive flags:
 ```powershell
-.\fix.ps1 -Full         # Recommended: Timeout + Prompt & Snooze
+.\fix.ps1 -Full         # Recommended: Full Fix
 .\fix.ps1 -TimeoutOnly  # Timeout only
 .\fix.ps1 -Restore      # Revert to original backup
 ```
@@ -63,7 +65,7 @@ node fix.js
 
 Non-interactive flags:
 ```bash
-node fix.js --full      # Recommended
+node fix.js --full      # Recommended: Full Fix
 node fix.js --timeout   # Timeout only
 node fix.js --restore   # Revert to original backup
 ```
@@ -72,14 +74,32 @@ node fix.js --restore   # Revert to original backup
 
 ## 💡 What the "Full Fix" Adds
 
-When an update is detected, instead of silently triggering a 200MB background download, VS Code will display a clean prompt:
+### 1. Transparent Update Confirmation with Download Size
+When an upstream release is detected, instead of silently triggering a 200MB background download, VS Code will display a clean prompt with the download size:
 
-> **"Antigravity Backend update (v1.4.5) is available (current: v1.4.4). Update now?"**  
-> `[Update]` `[Later (1 day)]` `[Skip for 3 days]`
+```text
+Antigravity Backend Update (v1.4.5) is available (current: v1.4.4). Update now?
 
-- **Update**: Downloads the new release immediately.
-- **Later (1 day)**: Postpones checks for 24 hours and uses your existing binary seamlessly.
-- **Skip for 3 days**: Silences update checks for 72 hours.
+Download size: 76.4 MB (~202 MB uncompressed)
+```
+
+**Available Options:**
+- **`[Update]`**: Install the available update immediately.
+- **`[Later (1 day)]`**: Delay the next update check for one day.
+- **`[Skip for 3 days]`**: Pause update checks for three days.
+- **`[Disable update checks permanently]`**: Stop automatic update checks indefinitely.
+
+### 2. Clear User Confirmation & Preference Notice
+When you select an option, a brief confirmation message explains that the choice is active, and notes that preferences cannot be modified from the popup anymore; they can be updated anytime in **Extension Settings** or via the **Command Palette**.
+
+### 3. Manual Control & Settings Configuration
+You retain 100% control over updates at all times:
+- **`Ctrl+Shift+P` -> `Antigravity: Check for Backend Updates`**:  
+  Manually triggers an update check on demand, bypassing any snooze timer or disabled status.
+- **`Ctrl+Shift+P` -> `Antigravity: Configure Backend Update Settings`**:  
+  Opens a QuickPick menu to re-enable checks, pause for 1 day, 3 days, 1 week, or disable permanently.
+- **VS Code Settings (`Ctrl+,` -> search `antigravity.updateCheckMode`)**:  
+  Directly toggle between `prompt`, `disabled`, and `always`.
 
 ---
 
@@ -127,7 +147,12 @@ To revert back to the original unmodified extension at any time:
 
 ### الحل:
 الاسكربت يوفر قائمة تفاعلية سهلة:
-- **الحل الكامل [1] (موصى به):** رفع مهلة الفحص إلى 30 ثانية + إظهار رسالة تأكيد عند وجود تحديث جديد مع خيار تأجيل التحديث (يوم أو 3 أيام).
+- **الحل الكامل [1] (موصى به):**
+  - رفع مهلة الفحص إلى 30 ثانية لتجاوز بطء Defender.
+  - إظهار رسالة تأكيد توضح حجم التنزيل قبل البدء (`Download size`).
+  - خيارات مرنة: `تحديث الآن`، `تأجيل يوم`، `تأجيل 3 أيام`، أو `تعطيل التحديثات التلقائية نهائياً`.
+  - إضافة أمر فحص يدوي في أي وقت من Command Palette: `Antigravity: Check for Backend Updates`.
+  - إمكانية تعديل الخيار لاحقاً من إعدادات الإضافة في VS Code (`antigravity.updateCheckMode`).
 - **إصلاح المهلة فقط [2]:** رفع المهلة إلى 30 ثانية دون رسالة التأكيد.
 - **استعادة النسخة الأصلية [3]:** الرجوع للنسخة الأصلية غير المعدلة في أي وقت.
 

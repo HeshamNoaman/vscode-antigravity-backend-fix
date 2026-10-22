@@ -20,9 +20,9 @@ if (isHelp) {
 Usage: node fix.js [options]
 
 Options:
-  --full, -f        Apply Full Fix (30s timeout + interactive update confirmation prompt) [Default]
+  --full, -f        Apply Full Fix (30s timeout + prompt with download size & settings control) [Default]
   --timeout, -t     Apply Timeout Fix only (increase timeout from 5s to 30s)
-  --restore, -r     Restore original extension.js from backup
+  --restore, -r     Restore original extension from backup
   --help, -h        Show this help message
 
 Running with no flags opens an interactive menu.
@@ -40,9 +40,11 @@ function promptMenu() {
     console.log("   VS Code Google Antigravity Backend Re-download Fixer   ");
     console.log("\x1b[36m==========================================================\x1b[0m\n");
     console.log("Select an option:");
-    console.log("  \x1b[32m[1] Full Fix (30s Timeout + Update Prompt & Snooze)\x1b[0m \x1b[33m[Recommended]\x1b[0m");
+    console.log("  \x1b[32m[1] Full Fix (Timeout + Update Confirmation & Settings)\x1b[0m \x1b[33m[Recommended]\x1b[0m");
     console.log("      - Fixes Defender timeout (5s -> 30s)");
-    console.log("      - Prompts before downloading daily updates (Update / Later 1 day / Skip 3 days)");
+    console.log("      - Prompts before downloading updates with exact download size");
+    console.log("      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently");
+    console.log("      - Adds Manual Check command and VS Code settings configuration");
     console.log("  [2] Timeout Fix Only");
     console.log("      - Increases timeout to 30s without update prompt");
     console.log("  [3] Restore Original Extension from Backup");
@@ -62,6 +64,19 @@ function promptMenu() {
       else resolve("full");
     });
   });
+}
+
+function writeAtomicSync(filePath, content) {
+  const tmpPath = filePath + ".tmp";
+  try {
+    fs.writeFileSync(tmpPath, content, "utf8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    if (fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+    throw err;
+  }
 }
 
 async function main() {
@@ -112,22 +127,11 @@ async function main() {
     process.exit(1);
   }
 
-  function writeAtomicSync(filePath, content) {
-    const tmpPath = filePath + ".tmp";
-    try {
-      fs.writeFileSync(tmpPath, content, "utf8");
-      fs.renameSync(tmpPath, filePath);
-    } catch (err) {
-      if (fs.existsSync(tmpPath)) {
-        try { fs.unlinkSync(tmpPath); } catch {}
-      }
-      throw err;
-    }
-  }
-
   for (const extDir of extensionDirs) {
     const extJsPath = path.join(extDir, "extension.js");
-    const bakPath = path.join(extDir, "extension.js.bak");
+    const extJsBak = path.join(extDir, "extension.js.bak");
+    const pkgJsonPath = path.join(extDir, "package.json");
+    const pkgJsonBak = path.join(extDir, "package.json.bak");
 
     console.log(`\n\x1b[34m[i] Target extension:\x1b[0m ${path.basename(extDir)}`);
 
@@ -137,20 +141,34 @@ async function main() {
     }
 
     if (mode === "restore") {
-      if (fs.existsSync(bakPath)) {
-        fs.copyFileSync(bakPath, extJsPath);
+      let restored = false;
+      if (fs.existsSync(extJsBak)) {
+        fs.copyFileSync(extJsBak, extJsPath);
         console.log("\x1b[32m[+] Restored original extension.js from backup.\x1b[0m");
-      } else {
-        console.warn("\x1b[33m[!] No backup found to restore.\x1b[0m");
+        restored = true;
+      }
+      if (fs.existsSync(pkgJsonBak)) {
+        fs.copyFileSync(pkgJsonBak, pkgJsonPath);
+        console.log("\x1b[32m[+] Restored original package.json from backup.\x1b[0m");
+        restored = true;
+      }
+      if (!restored) {
+        console.warn("\x1b[33m[!] No backup files found to restore.\x1b[0m");
       }
       continue;
     }
 
-    if (!fs.existsSync(bakPath)) {
-      fs.copyFileSync(extJsPath, bakPath);
-      console.log(`\x1b[32m[+] Created pristine backup at: ${bakPath}\x1b[0m`);
+    // Create backups if not already present
+    if (!fs.existsSync(extJsBak)) {
+      fs.copyFileSync(extJsPath, extJsBak);
+      console.log(`\x1b[32m[+] Created pristine backup: ${path.basename(extJsBak)}\x1b[0m`);
     } else {
-      console.log("\x1b[34m[i] Existing backup found. Preserving original backup.\x1b[0m");
+      console.log("\x1b[34m[i] Existing extension.js backup found. Preserving original.\x1b[0m");
+    }
+
+    if (fs.existsSync(pkgJsonPath) && !fs.existsSync(pkgJsonBak)) {
+      fs.copyFileSync(pkgJsonPath, pkgJsonBak);
+      console.log(`\x1b[32m[+] Created pristine backup: ${path.basename(pkgJsonBak)}\x1b[0m`);
     }
 
     let code = fs.readFileSync(extJsPath, "utf8");
@@ -175,33 +193,215 @@ async function main() {
       }
     }
 
-    // 2. Interactive Update Confirmation Prompt & Snooze (Full Fix)
+    // 2. Full Fix: Enhanced Prompt, Download Size, Confirmation, and Settings
     if (mode === "full") {
-      if (code.includes("antigravity.updatePostponedUntil")) {
-        console.log("\x1b[34m[i] Interactive update confirmation prompt is already active.\x1b[0m");
-      } else {
-        const regex1 = /(var d=b\(await c\(hb\(w,Ga\.MIN_AGY_VERSION,k\)\)\);let ja=Ga\.MIN_AGY_VERSION;a=!1;if\(d\)\{)/;
-        const inj1 = '$1let _pu=g.globalState.get("antigravity.updatePostponedUntil");if(_pu&&Date.now()<_pu){k.appendLine(`[INSTALL] Update checks are postponed until ${new Date(_pu).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}';
+      // Injection 1: Settings & Snooze Check Before Remote Fetch
+      const regex1 = /(var d=b\(await c\(hb\(w,Ga\.MIN_AGY_VERSION,k\)\)\);let ja=Ga\.MIN_AGY_VERSION;a=!1;if\(d\)\{)/;
+      const inj1 = '$1' +
+        'let _cfg=l.workspace.getConfiguration("antigravity");' +
+        'let _mode=_cfg.get("updateCheckMode")||"prompt";' +
+        'if(_mode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary v${d}.`);return w;}' +
+        'let _snooze=_cfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");' +
+        'if(_snooze&&Date.now()<Number(_snooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_snooze)).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}';
 
-        const regex2 = /(Skipping download\.`\),\s*w;)(let Ub=)/;
-        const inj2 = '$1if(d&&!cb(d,ja)){let _ans=b(await c(l.window.showInformationMessage(`Antigravity Backend update (v${ja}) is available (current: v${d}). Update now?`,"Update","Later (1 day)","Skip for 3 days")));if(_ans!=="Update"){let _hrs=_ans==="Skip for 3 days"?72:24;b(await c(g.globalState.update("antigravity.updatePostponedUntil",Date.now()+_hrs*3600000)));k.appendLine(`[INSTALL] User chose \'${_ans||"Dismiss"}\'. Postponing updates for ${_hrs}h. Continuing with existing binary v${d}.\`);return w;}}$2';
+      // Injection 2: Prompt with Download Size, 4 Options, and Confirmation Messages
+      const regex2 = /(Skipping download\.`\),\s*w;)(let Ub=)/;
+      const inj2 = '$1' +
+        'if(d&&!cb(d,ja)){' +
+          'let _sz="~76 MB (~202 MB uncompressed)";' +
+          'try{' +
+            'let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;' +
+            'let _mres=b(await c(ta(_murl,{signal:AbortSignal.timeout(1500)})));' +
+            'if(_mres&&_mres.status===200){' +
+              'let _mdata=b(await c(_mres.json()));' +
+              'let _bin=tb(_mdata,process.platform,process.arch);' +
+              'if(_bin&&_bin.url){' +
+                'let _hres=b(await c(ta(_bin.url,{method:"HEAD",signal:AbortSignal.timeout(1500)})));' +
+                'let _cl=_hres&&_hres.headers&&_hres.headers.get("content-length");' +
+                'if(_cl){_sz=`${(Number(_cl)/(1024*1024)).toFixed(1)} MB (~202 MB uncompressed)`;}' +
+              '}' +
+            '}' +
+          '}catch(_e){}' +
+          'let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${d}). Update now?\\n\\nDownload size: ${_sz}`;' +
+          'let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));' +
+          'if(_ans==="Update"){' +
+            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));' +
+            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch(_e){}' +
+          '}else if(_ans==="Later (1 day)"){' +
+            'let _until=Date.now()+86400000;' +
+            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
+            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}' +
+            'l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
+            'k.appendLine(`[INSTALL] User chose \'Later (1 day)\'. Continuing with existing binary v${d}.`);' +
+            'return w;' +
+          '}else if(_ans==="Skip for 3 days"){' +
+            'let _until=Date.now()+259200000;' +
+            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
+            'try{l.workspace.getConfiguration("antigravity").update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch(_e){}' +
+            'l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
+            'k.appendLine(`[INSTALL] User chose \'Skip for 3 days\'. Continuing with existing binary v${d}.`);' +
+            'return w;' +
+          '}else if(_ans==="Disable update checks permanently"){' +
+            'b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));' +
+            'try{' +
+              'let _c=l.workspace.getConfiguration("antigravity");' +
+              '_c.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);' +
+              '_c.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);' +
+            '}catch(_e){}' +
+            'l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run \'Antigravity: Check for Backend Updates\' from the Command Palette.");' +
+            'k.appendLine(`[INSTALL] User chose \'Disable update checks permanently\'. Continuing with existing binary v${d}.`);' +
+            'return w;' +
+          '}else{' +
+            'return w;' +
+          '}' +
+        '}$2';
+
+      // Injection 3: Register Manual Check & Configure Settings Commands
+      const regex3 = /(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{[^}]+\}\)\);)/;
+      const inj3 = '$1' +
+        'a.subscriptions.push(l.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{' +
+          'l.window.withProgress({location:l.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{' +
+            'try{' +
+              'let _cfg=l.workspace.getConfiguration("antigravity");' +
+              'await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);' +
+              'await a.globalState.update("antigravity.updatePostponedUntil",0);' +
+              'let _r=await l.commands.executeCommand("antigravity.resetConversationState");' +
+              'l.window.showInformationMessage("Backend update check initiated. If an update is available, the update prompt will appear.");' +
+            '}catch(_err){l.window.showErrorMessage(`Update check failed: ${_err.message}`);}' +
+          '});' +
+        '}));' +
+        'a.subscriptions.push(l.commands.registerCommand("antigravity.configureUpdateSettings",async()=>{' +
+          'let _pick=await l.window.showQuickPick([' +
+            '{label:"$(check) Enable Automatic Updates (Prompt on update)",description:"Prompt before downloading with download size",action:"prompt"},' +
+            '{label:"$(clock) Pause Updates for 1 Day",description:"Silence update checks for 24 hours",action:"pause1d"},' +
+            '{label:"$(clock) Pause Updates for 3 Days",description:"Silence update checks for 72 hours",action:"pause3d"},' +
+            '{label:"$(clock) Pause Updates for 1 Week",description:"Silence update checks for 7 days",action:"pause7d"},' +
+            '{label:"$(circle-slash) Disable Automatic Updates Permanently",description:"Never check automatically; manual check only",action:"disabled"},' +
+            '{label:"$(gear) Open Antigravity Settings",description:"Open VS Code Settings filtered to Antigravity",action:"settings"}' +
+          '],{placeHolder:"Configure Antigravity Backend Update Behavior"});' +
+          'if(!_pick)return;' +
+          'let _cfg=l.workspace.getConfiguration("antigravity");' +
+          'if(_pick.action==="prompt"){' +
+            'await _cfg.update("updateCheckMode","prompt",l.ConfigurationTarget.Global);' +
+            'await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);' +
+            'await a.globalState.update("antigravity.updatePostponedUntil",0);' +
+            'l.window.showInformationMessage("Antigravity updates set to Prompt mode. Snooze cleared.");' +
+          '}else if(_pick.action==="pause1d"){' +
+            'let _u=Date.now()+86400000;' +
+            'await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);' +
+            'await a.globalState.update("antigravity.updatePostponedUntil",_u);' +
+            'l.window.showInformationMessage("Antigravity updates paused for 1 day.");' +
+          '}else if(_pick.action==="pause3d"){' +
+            'let _u=Date.now()+259200000;' +
+            'await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);' +
+            'await a.globalState.update("antigravity.updatePostponedUntil",_u);' +
+            'l.window.showInformationMessage("Antigravity updates paused for 3 days.");' +
+          '}else if(_pick.action==="pause7d"){' +
+            'let _u=Date.now()+7*86400000;' +
+            'await _cfg.update("updateSnoozeUntil",_u,l.ConfigurationTarget.Global);' +
+            'await a.globalState.update("antigravity.updatePostponedUntil",_u);' +
+            'l.window.showInformationMessage("Antigravity updates paused for 1 week.");' +
+          '}else if(_pick.action==="disabled"){' +
+            'await _cfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);' +
+            'await _cfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);' +
+            'await a.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER);' +
+            'l.window.showInformationMessage("Antigravity automatic update checks disabled permanently.");' +
+          '}else if(_pick.action==="settings"){' +
+            'l.commands.executeCommand("workbench.action.openSettings","antigravity");' +
+          '}' +
+        '}));';
+
+      // Clean previously applied basic snooze if present to avoid duplicate injections
+      if (code.includes("antigravity.checkForBackendUpdates")) {
+        console.log("\x1b[34m[i] Enhanced update prompt and commands are already active.\x1b[0m");
+      } else {
+        // If an earlier simple patch exists, restore clean base from backup first
+        if (code.includes("antigravity.updatePostponedUntil") && fs.existsSync(extJsBak)) {
+          code = fs.readFileSync(extJsBak, "utf8");
+          // Re-apply timeout fix
+          code = code.replace(target, replacement);
+        }
 
         if (regex1.test(code) && regex2.test(code)) {
           code = code.replace(regex1, inj1);
           code = code.replace(regex2, inj2);
+          if (regex3.test(code)) {
+            code = code.replace(regex3, inj3);
+          }
           modified = true;
-          console.log("\x1b[32m[+] Enabled interactive update prompt & snooze (1-day / 3-day quiet mode).\x1b[0m");
+          console.log("\x1b[32m[+] Injected update prompt with download size & command palette controls.\x1b[0m");
         } else {
-          console.warn("\x1b[33m[!] Could not match update prompt injection points. Extension minification may differ.\x1b[0m");
+          console.warn("\x1b[33m[!] Could not match injection points in extension.js.\x1b[0m");
+        }
+      }
+
+      // 3. Update package.json to contribute settings & commands in VS Code
+      if (fs.existsSync(pkgJsonPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
+          let pkgModified = false;
+
+          pkg.contributes = pkg.contributes || {};
+          pkg.contributes.commands = pkg.contributes.commands || [];
+          pkg.contributes.configuration = pkg.contributes.configuration || {};
+          pkg.contributes.configuration.properties = pkg.contributes.configuration.properties || {};
+
+          const commandsToAdd = [
+            {
+              command: "antigravity.checkForBackendUpdates",
+              title: "Check for Backend Updates",
+              category: "Antigravity"
+            },
+            {
+              command: "antigravity.configureUpdateSettings",
+              title: "Configure Backend Update Settings",
+              category: "Antigravity"
+            }
+          ];
+
+          for (const cmd of commandsToAdd) {
+            if (!pkg.contributes.commands.some((c) => c.command === cmd.command)) {
+              pkg.contributes.commands.push(cmd);
+              pkgModified = true;
+            }
+          }
+
+          if (!pkg.contributes.configuration.properties["antigravity.updateCheckMode"]) {
+            pkg.contributes.configuration.properties["antigravity.updateCheckMode"] = {
+              type: "string",
+              enum: ["prompt", "disabled", "always"],
+              default: "prompt",
+              description: "Controls how Antigravity backend updates are handled: 'prompt' asks before downloading, 'disabled' stops automatic checks, 'always' auto-downloads."
+            };
+            pkgModified = true;
+          }
+
+          if (!pkg.contributes.configuration.properties["antigravity.updateSnoozeUntil"]) {
+            pkg.contributes.configuration.properties["antigravity.updateSnoozeUntil"] = {
+              type: "number",
+              default: 0,
+              description: "Timestamp (epoch ms) until which automatic update prompts are silenced."
+            };
+            pkgModified = true;
+          }
+
+          if (pkgModified) {
+            writeAtomicSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
+            console.log("\x1b[32m[+] Updated package.json with configuration settings & commands.\x1b[0m");
+          } else {
+            console.log("\x1b[34m[i] package.json already contains configuration settings.\x1b[0m");
+          }
+        } catch (err) {
+          console.warn("\x1b[33m[!] Could not update package.json: " + err.message + "\x1b[0m");
         }
       }
     }
 
     if (modified) {
       writeAtomicSync(extJsPath, code);
-      console.log("\x1b[32m[+] Successfully applied and saved patches!\x1b[0m");
+      console.log("\x1b[32m[+] Successfully applied and saved patches to extension.js!\x1b[0m");
     } else {
-      console.log("\x1b[34m[i] No new modifications required.\x1b[0m");
+      console.log("\x1b[34m[i] No new modifications required for extension.js.\x1b[0m");
     }
   }
 
