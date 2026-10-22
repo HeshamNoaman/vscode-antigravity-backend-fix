@@ -200,14 +200,17 @@ async function main() {
       const inj1 = '$1' +
         'let _cfg=l.workspace.getConfiguration("antigravity");' +
         'let _mode=_cfg.get("updateCheckMode")||"prompt";' +
-        'if(_mode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary v${d}.`);return w;}' +
-        'let _snooze=_cfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");' +
-        'if(_snooze&&Date.now()<Number(_snooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_snooze)).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}';
+        'if(!globalThis.__agyForceCheck){' +
+          'if(_mode==="disabled"){k.appendLine(`[INSTALL] Automatic update checks are disabled in settings (antigravity.updateCheckMode=disabled). Continuing with existing binary v${d}.`);return w;}' +
+          'let _snooze=_cfg.get("updateSnoozeUntil")||g.globalState.get("antigravity.updatePostponedUntil");' +
+          'if(_snooze&&Date.now()<Number(_snooze)){k.appendLine(`[INSTALL] Update checks are silenced until ${new Date(Number(_snooze)).toLocaleString()}. Continuing with existing binary v${d}.`);return w;}' +
+        '}';
 
       // Injection 2: Prompt with Download Size, 4 Options, and Confirmation Messages
       const regex2 = /(Skipping download\.`\),\s*w;)(let Ub=)/;
       const inj2 = '$1' +
-        'if(d&&!cb(d,ja)){' +
+        'if(d&&!cb(d,ja)&&l.workspace.getConfiguration("antigravity").get("updateCheckMode")!=="always"){' +
+          'globalThis.__agyPromptShown=true;' +
           'let _sz="~76 MB (~202 MB uncompressed)";' +
           'try{' +
             'let _murl=`${V}/manifests/${process.platform==="win32"?"windows":process.platform}_${process.arch==="x64"?"amd64":process.arch}.json`;' +
@@ -257,17 +260,22 @@ async function main() {
         '}$2';
 
       // Injection 3: Register Manual Check & Configure Settings Commands
-      const regex3 = /(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{[^}]+\}\)\);)/;
+      const regex3 = /(a\.subscriptions\.push\(l\.commands\.registerCommand\("antigravity\.openSettings",\s*async\s+[a-zA-Z0-9_]+\s*=>\s*\{.*?\}\)\);)/;
       const inj3 = '$1' +
         'a.subscriptions.push(l.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{' +
           'l.window.withProgress({location:l.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{' +
+            'globalThis.__agyForceCheck=true;' +
+            'globalThis.__agyPromptShown=false;' +
             'try{' +
               'let _cfg=l.workspace.getConfiguration("antigravity");' +
               'await _cfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);' +
               'await a.globalState.update("antigravity.updatePostponedUntil",0);' +
-              'let _r=await l.commands.executeCommand("antigravity.resetConversationState");' +
-              'l.window.showInformationMessage("Backend update check initiated. If an update is available, the update prompt will appear.");' +
+              'await cc.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(a);' +
+              'if(!globalThis.__agyPromptShown){' +
+                'l.window.showInformationMessage("Antigravity backend is up to date.");' +
+              '}' +
             '}catch(_err){l.window.showErrorMessage(`Update check failed: ${_err.message}`);}' +
+            'finally{delete globalThis.__agyForceCheck;delete globalThis.__agyPromptShown;}' +
           '});' +
         '}));' +
         'a.subscriptions.push(l.commands.registerCommand("antigravity.configureUpdateSettings",async()=>{' +
@@ -327,6 +335,8 @@ async function main() {
           code = code.replace(regex2, inj2);
           if (regex3.test(code)) {
             code = code.replace(regex3, inj3);
+          } else {
+            console.warn("\x1b[33m[!] Could not match openSettings registration point for commands in extension.js.\x1b[0m");
           }
           modified = true;
           console.log("\x1b[32m[+] Injected update prompt with download size & command palette controls.\x1b[0m");
