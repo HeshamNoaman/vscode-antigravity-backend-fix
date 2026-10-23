@@ -39,7 +39,7 @@ Select an option:
   [1] Full Fix (Timeout + Update Prompt, Size & Settings) [Recommended]
       - Fixes Defender timeout (5s -> 30s)
       - Prompts before downloading updates with exact download size
-      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently
+      - Options: Update / Later (1d) / Skip (3d) / Disable
       - Adds Manual Check command and VS Code settings configuration
   [2] Timeout Fix Only
       - Increases timeout to 30s without update prompt
@@ -78,8 +78,7 @@ node fix.js --restore   # Revert to original backup
 When an upstream release is detected, instead of silently triggering a 200MB background download, VS Code will display a clean prompt with the download size:
 
 ```text
-Antigravity Backend Update (v1.4.5) is available (current: v1.4.4). Update now?
-
+Antigravity Backend Update (v1.4.5) is available (current: v1.4.4).
 Download size: 76.4 MB (~202 MB uncompressed)
 ```
 

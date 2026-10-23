@@ -44,7 +44,7 @@ function promptMenu() {
     console.log("      - Fixes Defender timeout (5s -> 30s) + transient process lock retry");
     console.log("      - Download Gatekeeper: Never downloads if binary already exists on disk");
     console.log("      - Prompts before downloading updates with exact download size");
-    console.log("      - Options: Update / Later (1 day) / Skip for 3 days / Disable permanently");
+    console.log("      - Options: Update / Later (1d) / Skip (3d) / Disable");
     console.log("      - Adds Manual Check command and VS Code settings configuration");
     console.log("  [2] Timeout Fix Only");
     console.log("      - Increases timeout to 30s without update prompt");
@@ -250,33 +250,33 @@ async function main() {
                 '}' +
               '}' +
             '}catch{}' +
-            'let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${_curVer}). Update now?\\n\\nDownload size: ${_sz}`;' +
-            'let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1 day)","Skip for 3 days","Disable update checks permanently")));' +
+            'let _promptMsg=`Antigravity Backend Update (v${ja}) is available (current: v${_curVer}).\\n\\u2028Download size: ${_sz}`;' +
+            'let _ans=b(await c(l.window.showInformationMessage(_promptMsg,"Update","Later (1d)","Skip (3d)","Disable")));' +
             'if(_ans==="Update"){' +
               'b(await c(g.globalState.update("antigravity.updatePostponedUntil",0)));' +
               'try{_agyCfg.update("updateSnoozeUntil",0,l.ConfigurationTarget.Global);}catch{}' +
-            '}else if(_ans==="Later (1 day)"){' +
+            '}else if(_ans==="Later (1d)"){' +
               'let _until=Date.now()+86400000;' +
               'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
               'try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}' +
               'l.window.showInformationMessage("Antigravity update check delayed for 1 day. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
-              'k.appendLine(`[INSTALL] User chose \'Later (1 day)\'. Continuing with existing binary v${_curVer}.`);' +
+              'k.appendLine(`[INSTALL] User chose \'Later (1d)\'. Continuing with existing binary v${_curVer}.`);' +
               'return w;' +
-            '}else if(_ans==="Skip for 3 days"){' +
+            '}else if(_ans==="Skip (3d)"){' +
               'let _until=Date.now()+259200000;' +
               'b(await c(g.globalState.update("antigravity.updatePostponedUntil",_until)));' +
               'try{_agyCfg.update("updateSnoozeUntil",_until,l.ConfigurationTarget.Global);}catch{}' +
               'l.window.showInformationMessage("Antigravity update checks paused for 3 days. Note: This preference cannot be changed from the popup; you can modify it in Extension Settings or via Command Palette.");' +
-              'k.appendLine(`[INSTALL] User chose \'Skip for 3 days\'. Continuing with existing binary v${_curVer}.`);' +
+              'k.appendLine(`[INSTALL] User chose \'Skip (3d)\'. Continuing with existing binary v${_curVer}.`);' +
               'return w;' +
-            '}else if(_ans==="Disable update checks permanently"){' +
+            '}else if(_ans==="Disable"){' +
               'b(await c(g.globalState.update("antigravity.updatePostponedUntil",Number.MAX_SAFE_INTEGER)));' +
               'try{' +
                 '_agyCfg.update("updateCheckMode","disabled",l.ConfigurationTarget.Global);' +
                 '_agyCfg.update("updateSnoozeUntil",Number.MAX_SAFE_INTEGER,l.ConfigurationTarget.Global);' +
               '}catch{}' +
               'l.window.showInformationMessage("Automatic update checks disabled permanently. Note: This preference cannot be changed from the popup; you can re-enable checks in Extension Settings or run \'Antigravity: Check for Backend Updates\' from the Command Palette.");' +
-              'k.appendLine(`[INSTALL] User chose \'Disable update checks permanently\'. Continuing with existing binary v${_curVer}.`);' +
+              'k.appendLine(`[INSTALL] User chose \'Disable\'. Continuing with existing binary v${_curVer}.`);' +
               'return w;' +
             '}else{' +
               'k.appendLine(`[INSTALL] Update prompt dismissed. Continuing with existing binary v${_curVer}.`);' +
