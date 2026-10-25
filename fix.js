@@ -257,8 +257,7 @@ async function main() {
                 `}` +
                 `if(_agyMode!=="always"){` +
                   `globalThis.__agyPromptShown=!0;` +
-                  `let _curVer=_agyInstalledVer||"1.4.5";` +
-                  `try{let _s=require("child_process").execFileSync(${binPathVar},["--version"],{timeout:3E4,encoding:"utf8"});let _m=_s.match(/(\\d+\\.\\d+\\.\\d+[^ \\t\\n\\r]*)/);if(_m)_curVer=_m[1];}catch{}` +
+                  `let _curVer=_agyInstalledVer;if(!_curVer){try{let _s=require("child_process").execFileSync(${binPathVar},["--version"],{timeout:3E4,encoding:"utf8"});let _m=_s.match(/(\\d+\\.\\d+\\.\\d+\\S*)/);if(_m)_curVer=_m[1];}catch{}_curVer=_curVer||"1.4.5";}` +
                   `let _sz="~76 MB (~202 MB uncompressed)";` +
                   `try{` +
                     `let _murl=\`\${${urlVar}}/manifests/\${process.platform==="win32"?"windows":process.platform}_\${process.arch==="x64"?"amd64":process.arch}.json\`;` +
@@ -361,7 +360,7 @@ async function main() {
                 `try{` +
                   `let _inst=await ${srvMgr}.AntigravityServerManager.getInstance().getInstalledTargetPath();` +
                   `let _s=require("child_process").execFileSync(_inst,["--version"],{timeout:3E4,encoding:"utf8"});` +
-                  `let _m=_s.match(/(\\d+\\.\\d+\\.\\d+[^ \\t\\n\\r]*)/);` +
+                  `let _m=_s.match(/(\\d+\\.\\d+\\.\\d+\\S*)/);` +
                   `if(_m)_cur=_m[1];` +
                 `}catch{}` +
                 `${extVs}.window.showInformationMessage(\`Antigravity backend is up to date (v\${_cur}).\`);` +
