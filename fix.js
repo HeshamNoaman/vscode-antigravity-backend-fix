@@ -274,7 +274,11 @@ async function main() {
                       `}` +
                     `}` +
                   `}catch{}` +
-                  `let _promptMsg=\`Antigravity Backend Update (v\${${targetVerVar}}) is available (current: v\${_curVer}).\\n\\u2028Download size: \${_sz}\`;` +
+                  `if(globalThis.__agyDismissCheckProgress){` +
+                  `globalThis.__agyDismissCheckProgress();delete globalThis.__agyDismissCheckProgress;` +
+                  `b(await c(new Promise(_r=>setTimeout(_r,100))));` +
+                `}` +
+                  `let _promptMsg=\`Antigravity Backend Update (v\${${targetVerVar}}) is available (current: v\${_curVer}) \u2022 Download size: \${_sz}\`;` +
                   `let _ans=b(await c(${vscodeVar}.window.showInformationMessage(_promptMsg,"Update","Later (1d)","Skip (3d)","Disable")));` +
                   `if(_ans==="Update"){` +
                     `b(await c(${ctxVar}.globalState.update("antigravity.updatePostponedUntil",0)));` +
@@ -334,23 +338,43 @@ async function main() {
 
         const repCmd = `${mCmd[0]}` +
           `${extCtx}.subscriptions.push(${extVs}.commands.registerCommand("antigravity.checkForBackendUpdates",async()=>{` +
-            `${extVs}.window.withProgress({location:${extVs}.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},async()=>{` +
-              `globalThis.__agyForceCheck=true;globalThis.__agyPromptShown=false;` +
-              `try{` +
-                `let _cfg=${extVs}.workspace.getConfiguration("antigravity");` +
-                `await _cfg.update("updateSnoozeUntil",0,${extVs}.ConfigurationTarget.Global);` +
-                `await ${extCtx}.globalState.update("antigravity.updatePostponedUntil",0);` +
-                `await ${srvMgr}.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(${extCtx});` +
-                `if(!globalThis.__agyPromptShown){` +
-                  `${extVs}.window.showInformationMessage("Antigravity backend is up to date.");` +
-                `}` +
-              `}catch(_err){` +
-                `${extVs}.window.showErrorMessage(\`Update check failed: \${_err.message}\`);` +
-              `}finally{` +
-                `delete globalThis.__agyForceCheck;` +
-                `delete globalThis.__agyPromptShown;` +
+            `if(globalThis.__agyCheckingInProgress){` +
+              `${extVs}.window.showInformationMessage("Antigravity update check is already in progress.");` +
+              `return;` +
+            `}` +
+            `globalThis.__agyCheckingInProgress=true;` +
+            `globalThis.__agyForceCheck=true;` +
+            `globalThis.__agyPromptShown=false;` +
+            `let _endProgress;` +
+            `const _progressPromise=new Promise(_r=>{_endProgress=_r;});` +
+            `globalThis.__agyDismissCheckProgress=_endProgress;` +
+            `try{` +
+              `let _cfg=${extVs}.workspace.getConfiguration("antigravity");` +
+              `await _cfg.update("updateSnoozeUntil",0,${extVs}.ConfigurationTarget.Global);` +
+              `await ${extCtx}.globalState.update("antigravity.updatePostponedUntil",0);` +
+              `const _progressTask=${extVs}.window.withProgress({location:${extVs}.ProgressLocation.Notification,title:"Checking for Antigravity backend updates..."},()=>_progressPromise);` +
+              `await ${srvMgr}.AntigravityServerManager.getInstance().acquireInstalledBinaryPath(${extCtx});` +
+              `if(globalThis.__agyDismissCheckProgress){globalThis.__agyDismissCheckProgress();delete globalThis.__agyDismissCheckProgress;}` +
+              `await _progressTask;` +
+              `if(!globalThis.__agyPromptShown){` +
+                `let _cur="unknown";` +
+                `try{` +
+                  `let _inst=await ${srvMgr}.AntigravityServerManager.getInstance().getInstalledTargetPath();` +
+                  `let _s=require("child_process").execFileSync(_inst,["--version"],{timeout:3E4,encoding:"utf8"});` +
+                  `let _m=_s.match(/(\\d+\\.\\d+\\.\\d+[^ \\t\\n\\r]*)/);` +
+                  `if(_m)_cur=_m[1];` +
+                `}catch{}` +
+                `${extVs}.window.showInformationMessage(\`Antigravity backend is up to date (v\${_cur}).\`);` +
               `}` +
-            `});` +
+            `}catch(_err){` +
+              `if(globalThis.__agyDismissCheckProgress){globalThis.__agyDismissCheckProgress();delete globalThis.__agyDismissCheckProgress;}` +
+              `${extVs}.window.showErrorMessage(\`Update check failed: \${_err.message}\`);` +
+            `}finally{` +
+              `if(globalThis.__agyDismissCheckProgress){globalThis.__agyDismissCheckProgress();delete globalThis.__agyDismissCheckProgress;}` +
+              `delete globalThis.__agyCheckingInProgress;` +
+              `delete globalThis.__agyForceCheck;` +
+              `delete globalThis.__agyPromptShown;` +
+            `}` +
           `}));` +
           `${extCtx}.subscriptions.push(${extVs}.commands.registerCommand("antigravity.configureUpdateSettings",async()=>{` +
             `let _pick=await ${extVs}.window.showQuickPick([` +

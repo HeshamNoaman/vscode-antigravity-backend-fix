@@ -78,8 +78,7 @@ node fix.js --restore   # Revert to original backup
 When an upstream release is detected, instead of silently triggering a 200MB background download, VS Code will display a clean prompt with the download size:
 
 ```text
-Antigravity Backend Update (v1.4.5) is available (current: v1.4.4).
-Download size: 76.4 MB (~202 MB uncompressed)
+Antigravity Backend Update (v1.4.5) is available (current: v1.4.4) • Download size: 76.4 MB (~202 MB uncompressed)
 ```
 
 **Available Options:**
