@@ -524,6 +524,12 @@ async function main() {
     }
 
     if (modified) {
+      try {
+        new (require("node:vm")).Script(code);
+      } catch (syntaxErr) {
+        console.error(`\x1b[31m[-] Syntax validation FAILED for ${path.basename(extJsPath)}. Aborting write:\x1b[0m`, syntaxErr.message);
+        continue;
+      }
       writeAtomicSync(extJsPath, code);
       console.log("\x1b[32m[+] Successfully applied and saved patches to extension.js!\x1b[0m");
     } else {
